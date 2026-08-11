@@ -30,3 +30,20 @@ game-design-studio/
 ├── requirements.txt
 ├── .gitignore
 └── README.md
+
+## 🔗 Live Demo
+[Try the app here](https://your-app-name.streamlit.app)  <!-- update once deployed -->
+
+## ⚙️ Setup & Run Locally
+
+1. Clone the repository
+```bash
+   git clone https://github.com/Pravallika2919/game-design-studio.git
+   cd game-design-studio
+```
+2. Install dependencies
+```bash
+   pip install -r requirements.txt
+```
+3. Add your Groq API key
+   Create a `.env` file in the project root:
