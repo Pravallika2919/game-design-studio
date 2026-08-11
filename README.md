@@ -47,3 +47,7 @@ game-design-studio/
 ```
 3. Add your Groq API key
    Create a `.env` file in the project root:
+4. Run the app
+```bash
+   streamlit run app.py
+```
