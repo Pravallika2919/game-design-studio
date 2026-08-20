@@ -3,6 +3,9 @@ import requests
 from dotenv import load_dotenv
 import os
 import time
+import re
+import markdown as md
+
 
 load_dotenv()
 
@@ -19,11 +22,14 @@ st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&family=Rajdhani:wght@400;600&display=swap');
 :root {
-    --bg:#0a0a0f; --surface:#12121a; --border:#2a2a3a;
-    --accent:#7c3aed; --accent2:#10b981; --text:#e2e8f0; --muted:#64748b;
+    --bg:      #0d0b1a;   /* deep indigo-black background */
+    --surface: #16132b;   /* card background - dark violet */
+    --border:  #3d2f6b;   /* soft purple border */
+    --accent:  #d4af37;   /* antique gold - headings/highlights */
+    --text:    #e8e6f0;   /* soft off-white for readability */
 }
 html,body,[data-testid="stAppViewContainer"]{
-    background:var(--bg)!important;color:var(--text);font-family:'Rajdhani',sans-serif;
+    body { background-color: var(--bg); color: var(--text); }font-family:'Rajdhani',sans-serif;
 }
 h1,h2,h3{font-family:'Orbitron',monospace;}
 [data-testid="stSidebar"]{background:var(--surface)!important;border-right:1px solid var(--border);}
@@ -33,24 +39,42 @@ h1,h2,h3{font-family:'Orbitron',monospace;}
     font-family:'Rajdhani',sans-serif;font-size:1rem;
 }
 .stButton>button{
-    background:var(--accent)!important;color:white!important;border:none!important;
+    background:#7c3aed!important;color:white!important;border:none!important;
     border-radius:6px;font-family:'Orbitron',monospace;font-size:0.75rem;
     letter-spacing:0.1em;padding:0.6rem 1.5rem;
 }
-.stButton>button:hover{opacity:0.85;}
-.agent-card{
-    background:var(--surface);border:1px solid var(--border);
-    border-radius:10px;padding:1rem 1.25rem;margin-bottom:0.75rem;
+.stButton>button:hover{opacity:0.85;background:#6d28d9!important;}
+.agent-card {
+    background: var(--surface);
+    border-left: 4px solid var(--accent);   /* gold left border like before, but warmer */
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 16px;
 }
-.agent-card.success{border-left:3px solid var(--accent2);}
-.agent-card.error  {border-left:3px solid #ef4444;}
-.agent-card.running{border-left:3px solid var(--accent);}
+.agent-card.success {
+    border: 2px solid #22c55e !important;
+    border-radius: 10px;
+    box-shadow: 0 0 8px rgba(34,197,94,0.3);
+}
+.agent-card.error {
+    border: 2px solid #ef4444 !important;
+    border-radius: 10px;
+    box-shadow: 0 0 8px rgba(239,68,68,0.3);
+}
+.agent-card.running {
+    border: 2px solid #3b82f6 !important;
+    border-radius: 10px;
+}
 .agent-card.warning{border-left:3px solid #f59e0b;}
 .agent-title{
     font-family:'Orbitron',monospace;font-size:0.7rem;
     letter-spacing:0.15em;color:var(--muted);margin-bottom:0.5rem;
 }
-.agent-content{font-size:0.95rem;line-height:1.7;white-space:pre-wrap;}
+.agent-content h1, .agent-content h2, .agent-content h3,
+.agent-content strong {
+    color: var(--accent);
+}
+
 .model-tag{font-size:0.6rem;color:#475569;margin-bottom:4px;}
 .status-badge{
     display:inline-block;font-size:0.65rem;font-family:'Orbitron',monospace;
@@ -68,13 +92,8 @@ hr{border-color:var(--border);}
 # ── Groq models (fallback order) ──────────────────────────────────────────────
 # All FREE on Groq — fast inference, high rate limits
 GROQ_MODELS = [
-    "llama-3.3-70b-versatile",      # Best quality, free
-    "llama-3.1-8b-instant",         # Fast, free
-    "llama3-70b-8192",              # Reliable, free
-    "llama3-8b-8192",               # Lightweight, free
-    "mixtral-8x7b-32768",           # Good quality, free
-    "gemma2-9b-it",                 # Google Gemma, free
-    "gemma-7b-it",                  # Smaller Gemma, free
+    "openai/gpt-oss-20b",              # Fast, free
+    "openai/gpt-oss-120b",             # Reliable, free
 ]
 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
@@ -149,6 +168,8 @@ def call_groq(api_key: str, agent_name: str, context: str) -> tuple[str, str]:
         "Content-Type": "application/json",
     }
 
+    last_error = "No response received"
+
     for model in GROQ_MODELS:
         for attempt in range(3):
             payload = {
@@ -162,78 +183,81 @@ def call_groq(api_key: str, agent_name: str, context: str) -> tuple[str, str]:
             }
 
             try:
-                resp = requests.post(GROQ_URL, headers=headers,
-                                     json=payload, timeout=60)
-                data = resp.json()
+                response = requests.post(GROQ_URL, headers=headers,
+                                          json=payload, timeout=60)
+                data = response.json()
 
-                # ✅ Success
-                if resp.status_code == 200:
+                # Success
+                if response.status_code == 200:
                     text = data["choices"][0]["message"]["content"]
                     return text.strip(), model
 
-                # 🔑 Auth error — stop immediately
-                if resp.status_code in (401, 403):
+                # Auth error - stop immediately
+                if response.status_code in (401, 403):
                     raise Exception(
                         "Invalid Groq API key. Check GROQ_API_KEY in your .env file."
                     )
 
-                # ⏳ Rate limit on this model — wait briefly then try next model
-                if resp.status_code == 429:
-                    wait = int(resp.headers.get("Retry-After", "10"))
-                    wait = min(wait, 15)  # cap at 15s
+                # Rate limit on this model - wait briefly then try next model
+                if response.status_code == 429:
+                    wait = int(response.headers.get("Retry-After", "10"))
+                    wait = min(wait, 30)  # cap at 15s
+                    last_error = f"Rate limited on {model}"
                     time.sleep(wait)
                     break  # try next model
 
-                # ❌ Model not found — next model
-                if resp.status_code in (400, 404):
+                # Model not found - next model
+                if response.status_code in (400, 404):
                     err_msg = data.get("error", {}).get("message", "")
-                    if "model" in err_msg.lower() or resp.status_code == 404:
+                    last_error = f"{model}: {response.status_code} - {err_msg}"
+                    if "model" in err_msg.lower() or response.status_code == 404:
                         break
-                    # Other 400 — retry
                     time.sleep(2)
                     continue
 
-                # Server error — retry with backoff
-                if resp.status_code >= 500:
+                # Server error - retry with backoff
+                if response.status_code >= 500:
+                    last_error = f"{model}: server error {response.status_code}"
                     time.sleep(3 * (attempt + 1))
                     continue
 
             except requests.exceptions.Timeout:
+                last_error = f"{model}: timeout"
                 time.sleep(5)
                 continue
             except Exception as e:
                 if "Invalid Groq API key" in str(e):
                     raise
+                last_error = f"{model}: {str(e)}"
                 time.sleep(2)
                 continue
 
-    raise Exception(
-        "All Groq models failed. Check your internet connection or "
-        "visit console.groq.com to verify your key."
-    )
-
+    raise Exception(f"All Groq models failed. Last error: {last_error}")
 
 # ── UI ─────────────────────────────────────────────────────────────────────────
 def render_card(icon, title, subtitle, state, content="", model_used=""):
     badges = {
         "idle":    "",
         "running": '<span class="status-badge badge-run">● RUNNING</span>',
-        "done":    '<span class="status-badge badge-ok">✔ COMPLETE</span>',
-        "error":   '<span class="status-badge badge-err">✖ ERROR</span>',
+        "done":    '<span class="status-badge badge-ok">✓ COMPLETE</span>',
+        "error":   '<span class="status-badge badge-err">✕ ERROR</span>',
         "warning": '<span class="status-badge badge-warn">⚠ WARNING</span>',
     }
-    css_map = {
-        "idle":"","running":"running","done":"success","error":"error","warning":"warning"
-    }
+    css_map = {"idle":"","running":"running","done":"success","error":"error","warning":"warning"}
     sub  = f" · {subtitle}" if subtitle else ""
     meta = f'<div class="model-tag">model: {model_used}</div>' if model_used else ""
-    body = f'<div class="agent-content">{content}</div>' if content else ""
+    content_html = md.markdown(content, extensions=["extra"]) if content else ""
+    body = f'<div class="agent-content">{content_html}</div>' if content else ""
+
     st.markdown(f"""
     <div class="agent-card {css_map.get(state,'')}">
         <div class="agent-title">{icon} {title}{sub}</div>
         {badges.get(state,'')}{meta}{body}
-    </div>""", unsafe_allow_html=True)
+    </div>
+    """, unsafe_allow_html=True)
 
+
+    
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -298,15 +322,19 @@ with c1:
 st.markdown("---")
 
 # Icons row
+icon_slots = []
 cols = st.columns(len(AGENTS))
-for col, (icon, title, _) in zip(cols, AGENTS):
+for col, (icon, title, subtitle) in zip(cols, AGENTS):
     with col:
-        st.markdown(
-            f"<div style='text-align:center;font-size:2rem'>{icon}</div>"
+        slot = st.empty()
+        slot.markdown(
+            f"<div style='text-align:center;font-size:2rem;padding:8px;border-radius:8px;"
+            f"border:2px solid transparent'>{icon}</div>"
             f"<div style='text-align:center;font-size:0.55rem;font-family:Orbitron,monospace;"
             f"letter-spacing:0.08em;color:#64748b;margin-top:4px'>{title}</div>",
             unsafe_allow_html=True,
         )
+        icon_slots.append((slot, icon, title))
 
 st.markdown("---")
 
@@ -343,6 +371,17 @@ if run:
             with slot:
                 render_card(icon, title, subtitle, "done", output, model_used)
 
+            # NEW — turn the icon green
+            for icon_slot, icon_char, icon_title in icon_slots:
+                if icon_title == title:
+                    icon_slot.markdown(
+                    f"<div style='text-align:center;font-size:2rem;padding:8px;border-radius:8px;"
+                    f"border:2px solid #22c55e'>{icon_char}</div>"
+                    f"<div style='text-align:center;font-size:0.55rem;font-family:Orbitron,monospace;"
+                    f"letter-spacing:0.08em;color:#22c55e;margin-top:4px'>{icon_title}</div>",
+                    unsafe_allow_html=True,
+                )
+
         except Exception as e:
             err = str(e)
             with slot:
@@ -350,7 +389,7 @@ if run:
             if "Invalid Groq API key" in err:
                 st.stop()
 
-        time.sleep(1)   # Small delay — Groq is fast so 1s is enough
+        time.sleep(15)   # Small delay — Groq is fast so 1s is enough
 
     st.success("🎮 All agents complete! Your Game Design Document is ready above.")
     st.balloons()
