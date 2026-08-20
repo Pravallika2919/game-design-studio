@@ -32,7 +32,7 @@ game-design-studio/
 └── README.md
 
 ## 🔗 Live Demo
-[Try the app here](https://game-design-studio-gwkh5cwvhjmfaq3sjtjwb6.streamlit.app)  <!-- update once deployed -->
+[Try the app here](https://pravallika-game-design-studio.streamlit.app)  <!-- update once deployed -->
 
 ## ⚙️ Setup & Run Locally
 
