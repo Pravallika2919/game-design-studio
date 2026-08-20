@@ -6,7 +6,6 @@ import time
 import re
 import markdown as md
 
-
 load_dotenv()
 
 # ── Page config ────────────────────────────────────────────────────────────────
