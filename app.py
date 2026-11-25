@@ -1,10 +1,14 @@
-import streamlit as st
-import requests
-from dotenv import load_dotenv
 import os
-import time
 import re
-import markdown as md
+import time
+from datetime import datetime
+
+import streamlit as st
+from dotenv import load_dotenv
+
+import db
+from exporters import build_docx, build_markdown, build_pdf
+from groq_client import GroqAuthError, call_groq, list_chat_models
 
 load_dotenv()
 
@@ -21,83 +25,45 @@ st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&family=Rajdhani:wght@400;600&display=swap');
 :root {
-    --bg:      #0d0b1a;   /* deep indigo-black background */
-    --surface: #16132b;   /* card background - dark violet */
-    --border:  #3d2f6b;   /* soft purple border */
-    --accent:  #d4af37;   /* antique gold - headings/highlights */
-    --text:    #e8e6f0;   /* soft off-white for readability */
+    --bg:#0a0a0f; --surface:#12121a; --border:#2a2a3a;
+    --accent:#7c3aed; --accent2:#10b981; --text:#e2e8f0; --muted:#64748b;
 }
-html,body,[data-testid="stAppViewContainer"]{
-    body { background-color: var(--bg); color: var(--text); }font-family:'Rajdhani',sans-serif;
-}
+html,body,[data-testid="stAppViewContainer"]{background:var(--bg)!important;color:var(--text);font-family:'Rajdhani',sans-serif;}
 h1,h2,h3{font-family:'Orbitron',monospace;}
 [data-testid="stSidebar"]{background:var(--surface)!important;border-right:1px solid var(--border);}
-.stTextArea textarea{
-    background:var(--surface)!important;color:var(--text)!important;
-    border:1px solid var(--border)!important;border-radius:8px;
-    font-family:'Rajdhani',sans-serif;font-size:1rem;
-}
-.stButton>button{
-    background:#7c3aed!important;color:white!important;border:none!important;
-    border-radius:6px;font-family:'Orbitron',monospace;font-size:0.75rem;
-    letter-spacing:0.1em;padding:0.6rem 1.5rem;
-}
-.stButton>button:hover{opacity:0.85;background:#6d28d9!important;}
-.agent-card {
-    background: var(--surface);
-    border-left: 4px solid var(--accent);   /* gold left border like before, but warmer */
-    border-radius: 8px;
-    padding: 20px;
-    margin-bottom: 16px;
-}
-.agent-card.success {
-    border: 2px solid #22c55e !important;
-    border-radius: 10px;
-    box-shadow: 0 0 8px rgba(34,197,94,0.3);
-}
-.agent-card.error {
-    border: 2px solid #ef4444 !important;
-    border-radius: 10px;
-    box-shadow: 0 0 8px rgba(239,68,68,0.3);
-}
-.agent-card.running {
-    border: 2px solid #3b82f6 !important;
-    border-radius: 10px;
-}
-.agent-card.warning{border-left:3px solid #f59e0b;}
-.agent-title{
-    font-family:'Orbitron',monospace;font-size:0.7rem;
-    letter-spacing:0.15em;color:var(--muted);margin-bottom:0.5rem;
-}
-.agent-content h1, .agent-content h2, .agent-content h3,
-.agent-content strong {
-    color: var(--accent);
-}
-
+.stTextArea textarea{background:var(--surface)!important;color:var(--text)!important;border:1px solid var(--border)!important;border-radius:8px;font-family:'Rajdhani',sans-serif;font-size:1rem;}
+.stButton>button,.stDownloadButton>button{background:var(--accent)!important;color:white!important;border:none!important;border-radius:6px;font-family:'Orbitron',monospace;font-size:0.75rem;letter-spacing:0.1em;padding:0.6rem 1.5rem;}
+.stButton>button:hover,.stDownloadButton>button:hover{opacity:0.85;}
+.agent-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:1rem 1.25rem;margin-bottom:0.75rem;}
+.agent-card.success{border-left:3px solid var(--accent2);}
+.agent-card.error{border-left:3px solid #ef4444;}
+.agent-card.running{border-left:3px solid var(--accent);}
+.agent-title{font-family:'Orbitron',monospace;font-size:0.7rem;letter-spacing:0.15em;color:var(--muted);margin-bottom:0.5rem;}
+.agent-content{font-size:0.95rem;line-height:1.7;white-space:pre-wrap;}
 .model-tag{font-size:0.6rem;color:#475569;margin-bottom:4px;}
-.status-badge{
-    display:inline-block;font-size:0.65rem;font-family:'Orbitron',monospace;
-    padding:2px 8px;border-radius:4px;letter-spacing:0.1em;margin-bottom:0.5rem;
-}
-.badge-ok {background:#064e3b;color:#6ee7b7;}
+.status-badge{display:inline-block;font-size:0.65rem;font-family:'Orbitron',monospace;padding:2px 8px;border-radius:4px;letter-spacing:0.1em;margin-bottom:0.5rem;}
+.badge-ok{background:#064e3b;color:#6ee7b7;}
 .badge-err{background:#450a0a;color:#fca5a5;}
 .badge-run{background:#2e1065;color:#c4b5fd;}
-.badge-warn{background:#451a03;color:#fcd34d;}
+.export-box{background:var(--surface);border:1px solid var(--accent);border-radius:10px;padding:1rem 1.25rem;margin:1rem 0;}
+[data-testid="stVerticalBlockBorderWrapper"]{background:var(--surface);border-color:var(--border)!important;border-radius:10px;}
+[data-testid="stVerticalBlockBorderWrapper"] h1{font-size:1.25rem!important;margin:.6rem 0 .3rem!important;}
+[data-testid="stVerticalBlockBorderWrapper"] h2{font-size:1.1rem!important;margin:.6rem 0 .3rem!important;}
+[data-testid="stVerticalBlockBorderWrapper"] h3,[data-testid="stVerticalBlockBorderWrapper"] h4{font-size:1rem!important;margin:.5rem 0 .2rem!important;}
+[data-testid="stVerticalBlockBorderWrapper"] p{margin-bottom:.4rem;}
+[data-testid="stSidebar"] .stButton>button{background:#1a1a2a!important;border:1px solid var(--border)!important;font-family:'Rajdhani',sans-serif;letter-spacing:0;text-transform:none;font-size:.92rem;padding:.35rem .6rem;text-align:left;justify-content:flex-start;}
+[data-testid="stSidebar"] .stButton>button:hover{border-color:var(--accent)!important;}
+[data-baseweb="select"]>div{background:var(--surface)!important;border-color:var(--border)!important;color:var(--text)!important;}
+[data-testid="stExpander"]{background:var(--surface);border:1px solid var(--border)!important;border-radius:10px;}
 hr{border-color:var(--border);}
-#MainMenu,footer,header{visibility:hidden;}
+#MainMenu,footer{visibility:hidden;}
+header[data-testid="stHeader"]{background:transparent;}
+[data-testid="stSidebarCollapsedControl"] button,[data-testid="stExpandSidebarButton"],[data-testid="stSidebarCollapseButton"] button{color:#e2e8f0!important;}
+[data-testid="stSidebarCollapsedControl"],[data-testid="stExpandSidebarButton"]{background:#12121a;border:1px solid #7c3aed;border-radius:8px;}
 </style>
 """, unsafe_allow_html=True)
 
-# ── Groq models (fallback order) ──────────────────────────────────────────────
-# All FREE on Groq — fast inference, high rate limits
-GROQ_MODELS = [
-    "openai/gpt-oss-20b",              # Fast, free
-    "openai/gpt-oss-120b",             # Reliable, free
-]
-
-GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-
-# ── Agent definitions ──────────────────────────────────────────────────────────
+# ── Config ─────────────────────────────────────────────────────────────────────
 AGENTS = [
     ("💡", "CONCEPT DESIGNER",   "Core concept, genre, theme & elevator pitch"),
     ("⚙️", "MECHANICS DESIGNER", "Gameplay loops, systems & mechanics"),
@@ -110,9 +76,9 @@ AGENTS = [
 AGENT_PROMPTS = {
     "CONCEPT DESIGNER": (
         "You are a veteran game concept designer. Given a game idea, produce:\n"
-        "- A sharp elevator pitch (2-3 sentences)\n"
-        "- Genre & sub-genre\n- Core themes\n- Target audience\n"
-        "- 3 unique selling points\nBe concise, creative, and inspiring."
+        "- A sharp elevator pitch (2-3 sentences)\n- Genre & sub-genre\n"
+        "- Core themes\n- Target audience\n- 3 unique selling points\n"
+        "Be concise, creative, and inspiring."
     ),
     "MECHANICS DESIGNER": (
         "You are a gameplay systems designer. Design:\n"
@@ -147,8 +113,66 @@ AGENT_PROMPTS = {
     ),
 }
 
-# ── API helpers ────────────────────────────────────────────────────────────────
-def validate_key() -> tuple[bool, str]:
+# ── Customization dropdowns ───────────────────────────────────────────────────
+AUTO = "Let AI decide"
+OPTION_FIELDS = {          # key: (label, choices)
+    "genre": ("Genre", [AUTO, "Action", "Adventure", "RPG", "Strategy", "Puzzle", "Platformer",
+                        "Shooter", "Survival / Horror", "Simulation", "Card & Board", "Racing", "Sports"]),
+    "platform": ("Platform", [AUTO, "Mobile", "PC", "Console", "Web browser", "VR"]),
+    "audience": ("Audience", [AUTO, "Kids (under 12)", "Teens", "Adults", "All ages", "Casual players", "Hardcore players"]),
+    "art_style": ("Art style", [AUTO, "Pixel art", "Low-poly 3D", "Cel-shaded", "Realistic", "Hand-drawn", "Minimalist"]),
+    "tone": ("Tone", [AUTO, "Dark & gritty", "Cheerful & colourful", "Epic & heroic", "Funny", "Mysterious", "Relaxing"]),
+    "team": ("Team size", [AUTO, "Solo developer", "Small team (2-5)", "Medium team (6-15)", "Large team (16+)"]),
+}
+
+
+def chosen_options() -> dict:
+    """Only the dropdowns the user actually changed: {key: value}."""
+    out = {}
+    for k in OPTION_FIELDS:
+        v = st.session_state.get(f"opt_{k}", AUTO)
+        if v != AUTO:
+            out[k] = v
+    return out
+
+
+def labeled(options: dict) -> dict:
+    return {OPTION_FIELDS[k][0]: v for k, v in (options or {}).items() if k in OPTION_FIELDS}
+
+
+def build_brief(idea: str, options: dict) -> str:
+    text = f"Game Idea: {idea}\n"
+    if options:
+        text += "\nDesign constraints (every agent must follow these):\n"
+        text += "\n".join(f"- {OPTION_FIELDS[k][0]}: {v}" for k, v in options.items()) + "\n"
+    return text + "\n"
+
+
+# ── Token budget (free tier has a per-minute token cap) ───────────────────────
+LENGTH_RULE = {"GDD COMPILER": "Keep the whole document under 600 words."}
+DEFAULT_RULE = "Keep your answer under 250 words. Use short bullet points; avoid tables."
+MAX_TOKENS = {"GDD COMPILER": 1800}
+CONTEXT_CHARS = 1800        # each earlier agent is trimmed to this when passed on
+
+
+def trim(text: str, n: int = CONTEXT_CHARS) -> str:
+    return text if len(text) <= n else text[:n].rsplit(" ", 1)[0] + " …"
+
+
+db.init_db()
+
+
+# ── Session state (keeps results alive after a download click) ────────────────
+if "results" not in st.session_state:
+    st.session_state.results = {}      # {agent: {"output": str, "model": str}}
+    st.session_state.idea = ""
+    st.session_state.models = []
+    st.session_state.current_id = None
+    st.session_state.options = {}
+
+
+# ── Backend ────────────────────────────────────────────────────────────────────
+def validate_key():
     key = os.getenv("GROQ_API_KEY", "").strip()
     if not key:
         return False, "GROQ_API_KEY not set in .env"
@@ -157,162 +181,141 @@ def validate_key() -> tuple[bool, str]:
     return True, key
 
 
-def call_groq(api_key: str, agent_name: str, context: str) -> tuple[str, str]:
-    """
-    Call Groq API with automatic model fallback.
-    Returns (response_text, model_used).
-    """
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-
-    last_error = "No response received"
-
-    for model in GROQ_MODELS:
-        for attempt in range(3):
-            payload = {
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": AGENT_PROMPTS[agent_name]},
-                    {"role": "user",   "content": context},
-                ],
-                "max_tokens": 1500,
-                "temperature": 0.8,
-            }
-
-            try:
-                response = requests.post(GROQ_URL, headers=headers,
-                                          json=payload, timeout=60)
-                data = response.json()
-
-                # Success
-                if response.status_code == 200:
-                    text = data["choices"][0]["message"]["content"]
-                    return text.strip(), model
-
-                # Auth error - stop immediately
-                if response.status_code in (401, 403):
-                    raise Exception(
-                        "Invalid Groq API key. Check GROQ_API_KEY in your .env file."
-                    )
-
-                # Rate limit on this model - wait briefly then try next model
-                if response.status_code == 429:
-                    wait = int(response.headers.get("Retry-After", "10"))
-                    wait = min(wait, 30)  # cap at 15s
-                    last_error = f"Rate limited on {model}"
-                    time.sleep(wait)
-                    break  # try next model
-
-                # Model not found - next model
-                if response.status_code in (400, 404):
-                    err_msg = data.get("error", {}).get("message", "")
-                    last_error = f"{model}: {response.status_code} - {err_msg}"
-                    if "model" in err_msg.lower() or response.status_code == 404:
-                        break
-                    time.sleep(2)
-                    continue
-
-                # Server error - retry with backoff
-                if response.status_code >= 500:
-                    last_error = f"{model}: server error {response.status_code}"
-                    time.sleep(3 * (attempt + 1))
-                    continue
-
-            except requests.exceptions.Timeout:
-                last_error = f"{model}: timeout"
-                time.sleep(5)
-                continue
-            except Exception as e:
-                if "Invalid Groq API key" in str(e):
-                    raise
-                last_error = f"{model}: {str(e)}"
-                time.sleep(2)
-                continue
-
-    raise Exception(f"All Groq models failed. Last error: {last_error}")
-
-# ── UI ─────────────────────────────────────────────────────────────────────────
+# ── UI helpers ─────────────────────────────────────────────────────────────────
 def render_card(icon, title, subtitle, state, content="", model_used=""):
-    badges = {
-        "idle":    "",
+    badge = {
+        "idle": "",
         "running": '<span class="status-badge badge-run">● RUNNING</span>',
-        "done":    '<span class="status-badge badge-ok">✓ COMPLETE</span>',
-        "error":   '<span class="status-badge badge-err">✕ ERROR</span>',
-        "warning": '<span class="status-badge badge-warn">⚠ WARNING</span>',
-    }
-    css_map = {"idle":"","running":"running","done":"success","error":"error","warning":"warning"}
-    sub  = f" · {subtitle}" if subtitle else ""
+        "done": '<span class="status-badge badge-ok">✔ COMPLETE</span>',
+        "error": '<span class="status-badge badge-err">✖ ERROR</span>',
+    }[state]
     meta = f'<div class="model-tag">model: {model_used}</div>' if model_used else ""
-    content_html = md.markdown(content, extensions=["extra"]) if content else ""
-    body = f'<div class="agent-content">{content_html}</div>' if content else ""
-
-    st.markdown(f"""
-    <div class="agent-card {css_map.get(state,'')}">
-        <div class="agent-title">{icon} {title}{sub}</div>
-        {badges.get(state,'')}{meta}{body}
-    </div>
-    """, unsafe_allow_html=True)
+    with st.container(border=True):
+        st.markdown(
+            f'<div class="agent-title">{icon} {title} · {subtitle}</div>{badge}{meta}',
+            unsafe_allow_html=True,
+        )
+        if content:
+            st.markdown(content.replace("$", "\\$"))   # render markdown natively; $ is not LaTeX
 
 
-    
+def show_downloads():
+    """Download section — appears once at least one agent has produced output."""
+    results, idea = st.session_state.results, st.session_state.idea
+    brief = labeled(st.session_state.options)
+    if not results:
+        return
+
+    st.markdown("---")
+    st.markdown("### 📥 Download your Game Design Document")
+    slug = re.sub(r"[^a-z0-9]+", "_", idea.lower()).strip("_")[:30] or "game"
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.download_button("📄 PDF", data=build_pdf(idea, results, brief),
+                           file_name=f"GDD_{slug}.pdf", mime="application/pdf",
+                           use_container_width=True)
+    with c2:
+        st.download_button(
+            "📝 WORD", data=build_docx(idea, results, brief), file_name=f"GDD_{slug}.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            use_container_width=True)
+    with c3:
+        st.download_button("🗒️ MARKDOWN", data=build_markdown(idea, results, brief),
+                           file_name=f"GDD_{slug}.md", mime="text/markdown",
+                           use_container_width=True)
+
+
+# ── History (database) ────────────────────────────────────────────────────────
+def _load_entry(gdd_id):
+    row = db.load_gdd(gdd_id)
+    if row:
+        st.session_state.results = row["results"]
+        st.session_state.idea = row["idea"]
+        st.session_state.game_idea = row["idea"]       # fills the text box
+        st.session_state.current_id = gdd_id
+        st.session_state.options = row["options"]
+        for k, (_, choices) in OPTION_FIELDS.items():  # restore the dropdowns
+            v = row["options"].get(k, AUTO)
+            st.session_state[f"opt_{k}"] = v if v in choices else AUTO
+
+
+def _delete_entry(gdd_id):
+    db.delete_gdd(gdd_id)
+    if st.session_state.current_id == gdd_id:
+        st.session_state.results, st.session_state.current_id = {}, None
+
+
+def _new_entry():
+    st.session_state.results, st.session_state.idea = {}, ""
+    st.session_state.game_idea, st.session_state.current_id = "", None
+    st.session_state.options = {}
+    for k in OPTION_FIELDS:
+        st.session_state[f"opt_{k}"] = AUTO
+
+
+def render_history():
+    entries = db.list_gdds()
+    st.markdown(f"### 📚 History ({len(entries)})")
+    st.button("➕ New GDD", key="new_gdd", on_click=_new_entry, use_container_width=True)
+    if not entries:
+        st.caption("Nothing saved yet. Every GDD you generate is saved here automatically.")
+        return
+    for e in entries:
+        when = datetime.fromisoformat(e["created_at"]).strftime("%d %b, %I:%M %p")
+        label = ("▶ " if e["id"] == st.session_state.current_id else "") + e["idea"][:26]
+        c1, c2 = st.columns([5, 1])
+        with c1:
+            st.button(label, key=f"load_{e['id']}", on_click=_load_entry, args=(e["id"],),
+                      help=f"{e['idea']}\n{when} · {e['agents_done']}/6 agents",
+                      use_container_width=True)
+        with c2:
+            st.button("🗑", key=f"del_{e['id']}", on_click=_delete_entry, args=(e["id"],),
+                      help="Delete this GDD")
+        st.caption(f"{when} · {e['agents_done']}/6 agents")
+
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## 🎮 Game Design Studio")
     st.markdown("---")
-
     ok, msg = validate_key()
     if ok:
         st.success("✅ Groq API key loaded")
     else:
         st.error(f"❌ {msg}")
         st.markdown("""
-**Get your FREE Groq key:**
-1. Go to **[console.groq.com](https://console.groq.com)**
-2. Sign up (free, no credit card)
-3. Click **API Keys → Create API Key**
-4. Add to `.env`:
+**Get a FREE Groq key:**
+1. [console.groq.com](https://console.groq.com)
+2. API Keys → Create API Key
+3. Add to `.env`:
 ```
 GROQ_API_KEY=gsk_your_key_here
 ```
-5. Restart: `streamlit run app.py`
         """)
-
     st.markdown("---")
-    st.markdown(f"""
-**Why Groq?**
-- ⚡ Fastest inference available
-- ✅ Completely free
-- ✅ {len(GROQ_MODELS)} model fallbacks
-- ✅ Much higher rate limits
-- ✅ No quota surprises
-
-**Free Models**
-""")
-    for m in GROQ_MODELS:
-        st.markdown(f"• `{m}`")
-
-    st.markdown("""
----
-**Agents**
-💡 Concept Designer
-⚙️ Mechanics Designer
-📖 Narrative Designer
-🎨 Art Director
-🔍 Game Critic
-📋 GDD Compiler
-    """)
+    st.markdown("**Models**")
+    st.caption("Detected live from Groq on every run, so retired models never break the app.")
+    if st.session_state.get("models"):
+        for m in st.session_state.models[:5]:
+            st.markdown(f"• `{m}`")
+    st.markdown("---")
+    history_box = st.container()
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 st.markdown("## Describe your game idea")
-
 game_idea = st.text_area(
-    label="",
+    label="Game idea", label_visibility="collapsed", height=120, key="game_idea",
     placeholder="e.g. space adventure, zombie survival RPG, cozy farming sim...",
-    height=120,
 )
+
+with st.expander("🎛️ Customize your game (optional)", expanded=True):
+    st.caption("Leave as 'Let AI decide' for a surprise, or pick options to steer all 6 agents.")
+    keys = list(OPTION_FIELDS)
+    for row in (keys[:3], keys[3:]):
+        for col, k in zip(st.columns(3), row):
+            label, choices = OPTION_FIELDS[k]
+            col.selectbox(label, choices, key=f"opt_{k}")
 
 c1, _ = st.columns([1, 4])
 with c1:
@@ -320,79 +323,101 @@ with c1:
 
 st.markdown("---")
 
-# Icons row
-icon_slots = []
 cols = st.columns(len(AGENTS))
-for col, (icon, title, subtitle) in zip(cols, AGENTS):
+for col, (icon, title, _) in zip(cols, AGENTS):
     with col:
-        slot = st.empty()
-        slot.markdown(
-            f"<div style='text-align:center;font-size:2rem;padding:8px;border-radius:8px;"
-            f"border:2px solid transparent'>{icon}</div>"
+        st.markdown(
+            f"<div style='text-align:center;font-size:2rem'>{icon}</div>"
             f"<div style='text-align:center;font-size:0.55rem;font-family:Orbitron,monospace;"
             f"letter-spacing:0.08em;color:#64748b;margin-top:4px'>{title}</div>",
             unsafe_allow_html=True,
         )
-        icon_slots.append((slot, icon, title))
-
 st.markdown("---")
 
-# ── Run pipeline ───────────────────────────────────────────────────────────────
+# ── Pipeline ───────────────────────────────────────────────────────────────────
 if run:
     if not game_idea.strip():
         st.warning("Please describe your game idea first.")
         st.stop()
 
-    ok, key_or_msg = validate_key()
+    ok, key = validate_key()
     if not ok:
-        st.error(f"❌ {key_or_msg}")
-        st.info("👆 See sidebar for FREE Groq key setup")
+        st.error(f"❌ {key}")
         st.stop()
 
-    st.info(f"⚡ Groq engine ready | {len(GROQ_MODELS)} models on standby")
-    accumulated = f"Game Idea: {game_idea.strip()}\n\n"
+    st.session_state.results = {}
+    st.session_state.idea = game_idea.strip()
 
-    for icon, title, subtitle in AGENTS:
+    try:
+        models = list_chat_models(key)
+        st.session_state.models = models
+    except GroqAuthError as e:
+        st.error(f"🔑 {e}")
+        st.stop()
+    except Exception as e:
+        st.error(f"🌐 {e}")
+        st.stop()
+    st.info(f"⚡ Using `{models[0]}` (+{len(models) - 1} backups)")
+
+    progress = st.progress(0, text="Starting agents...")
+    st.session_state.options = chosen_options()
+    accumulated = build_brief(game_idea.strip(), st.session_state.options)
+
+    for i, (icon, title, subtitle) in enumerate(AGENTS):
+        progress.progress(i / len(AGENTS), text=f"Agent {i + 1} of {len(AGENTS)}: {title.title()}...")
         slot = st.empty()
         with slot:
             render_card(icon, title, subtitle, "running")
 
         prompt = (
-            accumulated +
-            f"\nYour role: {title}\n"
+            accumulated + f"\nYour role: {title}\n"
             f"Based on the game idea and all previous agent outputs above, "
             f"provide your expert {title.lower()} contribution now."
         )
-
         try:
-            output, model_used = call_groq(key_or_msg, title, prompt)
-            accumulated += f"\n\n=== {title} ===\n{output}"
+            def wait_msg(msg, _i=icon, _t=title, _s=subtitle):
+                with slot:
+                    render_card(_i, _t, _s, "running", msg)
+
+            system = AGENT_PROMPTS[title] + "\n\n" + LENGTH_RULE.get(title, DEFAULT_RULE)
+            output, model_used = call_groq(key, system, prompt, models,
+                                           max_tokens=MAX_TOKENS.get(title, 1200),
+                                           status_cb=wait_msg)
+            accumulated += f"\n\n=== {title} ===\n{trim(output)}"
+            st.session_state.results[title] = {"output": output, "model": model_used}
             with slot:
                 render_card(icon, title, subtitle, "done", output, model_used)
-
-            # NEW — turn the icon green
-            for icon_slot, icon_char, icon_title in icon_slots:
-                if icon_title == title:
-                    icon_slot.markdown(
-                    f"<div style='text-align:center;font-size:2rem;padding:8px;border-radius:8px;"
-                    f"border:2px solid #22c55e'>{icon_char}</div>"
-                    f"<div style='text-align:center;font-size:0.55rem;font-family:Orbitron,monospace;"
-                    f"letter-spacing:0.08em;color:#22c55e;margin-top:4px'>{icon_title}</div>",
-                    unsafe_allow_html=True,
-                )
-
         except Exception as e:
-            err = str(e)
             with slot:
-                render_card(icon, title, subtitle, "error", err[:300])
-            if "Invalid Groq API key" in err:
+                render_card(icon, title, subtitle, "error", str(e)[:600])
+            if isinstance(e, GroqAuthError):
                 st.stop()
+        time.sleep(1)
 
-        time.sleep(15)   # Small delay — Groq is fast so 1s is enough
+    done = len(st.session_state.results)
+    if done:
+        st.session_state.current_id = db.save_gdd(st.session_state.idea, st.session_state.results, st.session_state.options)
+    if done == len(AGENTS):
+        progress.progress(1.0, text="✅ All agents complete!")
+        st.success("🎮 Your Game Design Document is ready — download it below!")
+        st.balloons()
+    else:
+        progress.progress(done / len(AGENTS), text=f"⚠️ {done} of {len(AGENTS)} agents finished")
+        st.error(f"Only {done} of {len(AGENTS)} agents succeeded. See the error on the red card(s) above.")
 
-    st.success("🎮 All agents complete! Your Game Design Document is ready above.")
-    st.balloons()
-
+elif st.session_state.results:
+    # Page re-ran (e.g. after a download click) — redraw saved results
+    for icon, title, subtitle in AGENTS:
+        if title in st.session_state.results:
+            r = st.session_state.results[title]
+            render_card(icon, title, subtitle, "done", r["output"], r["model"])
+        else:
+            render_card(icon, title, subtitle, "idle")
 else:
     for icon, title, subtitle in AGENTS:
         render_card(icon, title, subtitle, "idle")
+
+show_downloads()
+
+with history_box:
+    render_history()
